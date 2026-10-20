@@ -1,103 +1,125 @@
-# Mock API Integration & Incident Triage Workspace
+# apitriagelog
 
-A local webhook receiver that behaves like a real B2B integration endpoint: it authenticates callers, validates
-payloads against a strict contract, returns diagnostic errors a customer can act on, and keeps a request log that
-lets a support engineer trace any call by its request ID.
+A fake company API that runs on your own PC. You send it webhooks (basically JSON messages from a "customer") and it either saves them or tells you exactly what's wrong with them. Every request gets logged, so you can go back and figure out what happened, which is the part support engineers actually get paid for.
 
-Built with **FastAPI**, **Pydantic v2** and **SQLite**. Runs entirely on `http://localhost:8000` at no cost.
+Built with Python, FastAPI, Pydantic and SQLite. Runs on localhost, costs nothing.
 
-## What it demonstrates
+## Why I made this
 
-- **Contract-first validation**: one Pydantic model defines the payload, and FastAPI enforces it before any business logic runs.
-- **Actionable errors**: every failure uses one JSON envelope. Validation errors list *every* problem at once, with the field, the reason, a fix hint and the rejected value.
-- **Traceability**: each response carries an `X-Request-ID`, and `GET /api/v1/logs` shows the status, error code, latency and linked ticket for every call, successful or not.
-- **Security basics**: API-key auth with a timing-safe comparison, a correct `401` + `WWW-Authenticate` challenge, `429` + `Retry-After`, and no customer emails or rejected values in the troubleshooting log.
-- **Tested**: 17 pytest cases plus a Postman collection with assertions.
+In L2/L3 support or integration work, a big chunk of the job is a customer saying "your API is broken" and you working out whose fault it actually is. It's usually one of these:
 
-## Project layout
+1. Their JSON is wrong (missing field, bad email, typo in a field name)
+2. Their API key is missing or wrong
+3. They're sending too much and getting rate limited
+4. It's actually our bug
 
-```
-apitriagelog/
-├── app/
-│   ├── main.py        # App setup, request-ID/logging middleware, lifespan (DB init)
-│   ├── routes.py      # /health, /webhook, /logs
-│   ├── schemas.py     # Pydantic models: CustomerWebhook, responses, error envelope
-│   ├── security.py    # X-API-Key check and simulated rate limit (FastAPI dependencies)
-│   ├── errors.py      # Exception handlers that build the error envelope (400 instead of 422)
-│   ├── database.py    # sqlite3 schema, inserts and log queries
-│   └── config.py      # Settings, overridable through environment variables
-├── examples/          # JSON bodies for curl / Postman
-├── postman/           # Importable Postman collection
-├── tests/             # pytest suite (uses a temp DB, never touches tickets.db)
-└── requirements.txt
-```
+This project fakes all four so I can practice spotting them, reading the logs, and explaining the fix in plain words.
 
-## Request lifecycle
+## What it does
 
-```
-Client ──► middleware: assign X-Request-ID, start timer
-             └─► require_api_key ........ 401 AUTH_MISSING_API_KEY / AUTH_INVALID_API_KEY
-                  └─► simulate_rate_limit ... 429 RATE_LIMITED (Retry-After: 60)
-                       └─► Pydantic validates body against CustomerWebhook ... 400 VALIDATION_FAILED
-                            └─► endpoint: insert into tickets ─► 200 {"status":"success","tracking_id":...}
-         ◄── middleware: add X-Request-ID header, write a row to request_logs
+| Endpoint | What it's for | Needs API key? |
+|---|---|---|
+| `GET /api/v1/health` | Checks the server and database are alive | No |
+| `POST /api/v1/webhook` | Where the "customer" sends their data | Yes |
+| `GET /api/v1/logs` | Shows recent requests, good and bad | Yes |
+
+The API key is `test_secret_123` and it goes in a header called `X-API-Key`. It's a fake key for local testing, not a real secret.
+
+> Note: a **header** is extra info that travels with a request, separate from the body. Think envelope vs the letter inside.
+
+A webhook that gets accepted looks like this:
+
+```json
+{
+  "ticket_id": "TCK-1001",
+  "customer_email": "jane.doe@acmecorp.com",
+  "payload_type": "ticket.created",
+  "data": {
+    "priority": "high",
+    "subject": "SSO login failing for EU tenant"
+  }
+}
 ```
 
-## Setup
+All four fields are required. `customer_email` has to be a proper email format and `data` has to be an object (the `{ }` kind, not a list). Extra fields get rejected too, so if someone sends `ticketId` instead of `ticket_id` they find out straight away, instead of the field just silently disappearing.
 
-Requires Python 3.10 or newer (developed on 3.14).
+If it's good you get back:
 
-**Windows (PowerShell)**
+```json
+{"status": "success", "tracking_id": "7b410280-751a-402e-8b28-7e0bf6fa014d"}
+```
+
+The `tracking_id` is a random ID for that saved ticket.
+
+## Running it
+
+You need Python 3.10 or newer.
+
+**Windows (PowerShell).** Run these one at a time, Enter after each:
 
 ```powershell
 git clone https://github.com/Auvendra/apitriagelog.git
 cd apitriagelog
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-# If activation is blocked: Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass, then activate again
-pip install -r requirements-dev.txt
-python -m uvicorn app.main:app --reload
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-**macOS / Linux**
+**Mac / Linux**
 
 ```bash
 git clone https://github.com/Auvendra/apitriagelog.git
 cd apitriagelog
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-dev.txt
-python -m uvicorn app.main:app --reload
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m uvicorn app.main:app --reload
 ```
 
-The server is ready when it prints `Uvicorn running on http://127.0.0.1:8000`. `tickets.db` is created on first start.
-Open **http://localhost:8000/docs** for interactive Swagger docs: click **Authorize**, enter `test_secret_123` and
-use *Try it out* on any endpoint.
+It's running when you see `Uvicorn running on http://127.0.0.1:8000`. Leave that window open, it's the live server log. Ctrl+C stops it.
 
-Use `requirements.txt` instead of `requirements-dev.txt` if you don't need the test tools.
+Next time, just `cd` into the folder and run the last line.
 
-## Endpoints
+> Note: `.venv` is a "virtual environment", a private folder of Python packages just for this project so it doesn't mess with anything else on your PC. Running `.venv\Scripts\python.exe` directly means you don't have to activate it first, and you skip the PowerShell "running scripts is disabled" error.
 
-| Method | Path              | Auth | Purpose                                                        |
-|--------|-------------------|------|----------------------------------------------------------------|
-| GET    | `/api/v1/health`  | No   | Liveness plus a database round-trip; `503` if the DB is unreachable |
-| POST   | `/api/v1/webhook` | Yes  | Validate and store a customer webhook                          |
-| GET    | `/api/v1/logs`    | Yes  | Recent requests, newest first. Query: `limit` (1–500, default 50), `status_code` |
+> Note: if you paste a few commands into PowerShell and they end up on one line, it breaks. One command per line, or put `;` between them.
 
-### Webhook contract
+## Using it
 
-| Field            | Type   | Rules                                   |
-|------------------|--------|-----------------------------------------|
-| `ticket_id`      | string | required, 1–64 chars                    |
-| `customer_email` | string | required, valid email format            |
-| `payload_type`   | string | required, 1–64 chars                    |
-| `data`           | object | required, must be a JSON object         |
+**Browser (easiest)**
 
-Unknown fields are rejected, so a typo such as `ticketId` is reported instead of silently ignored.
+1. Go to http://localhost:8000/docs
+2. Click **Authorize**, type `test_secret_123`, click Authorize, then Close
+3. Open `POST /api/v1/webhook`, click **Try it out**, then **Execute**. You should get a 200
+4. Mess up the body (delete a field, take the @ out of the email) and Execute again. Now you get a 400 telling you what's wrong
+5. Open `GET /api/v1/logs` and Execute to see both requests
 
-## Error catalog (support runbook)
+**Postman**
 
-Every error response looks like this:
+Import `postman/mock-api-triage.postman_collection.json`, click the collection and hit **Run**. It sends 9 requests (good ones, broken ones, no key, wrong key, rate limited, logs) and checks every response. Everything should come back green.
+
+**Terminal**
+
+On Windows type `curl.exe`, not `curl`. In PowerShell plain `curl` is actually a different command and it wrecks the JSON.
+
+```powershell
+# good request, expect 200
+curl.exe -X POST http://localhost:8000/api/v1/webhook -H "Content-Type: application/json" -H "X-API-Key: test_secret_123" --data "@examples/200_success.json"
+
+# bad email + missing field, expect 400
+curl.exe -X POST http://localhost:8000/api/v1/webhook -H "Content-Type: application/json" -H "X-API-Key: test_secret_123" --data "@examples/400_invalid_payload.json"
+
+# no API key, expect 401
+curl.exe -X POST http://localhost:8000/api/v1/webhook -H "Content-Type: application/json" --data "@examples/200_success.json"
+
+# pretend they hit the rate limit, expect 429
+curl.exe -X POST http://localhost:8000/api/v1/webhook -H "Content-Type: application/json" -H "X-API-Key: test_secret_123" -H "X-Simulate-Rate-Limit: true" --data "@examples/200_success.json"
+```
+
+Mac/Linux is the same, just `curl` instead of `curl.exe`.
+
+## Errors and what they actually mean
+
+Every error comes back in the same shape, so there's only one format to learn:
 
 ```json
 {
@@ -124,131 +146,94 @@ Every error response looks like this:
 }
 ```
 
-| HTTP | `error_code`           | Typical cause                                         | What to tell the customer                          |
-|------|------------------------|-------------------------------------------------------|----------------------------------------------------|
-| 400  | `VALIDATION_FAILED`    | Missing/extra field, bad email, malformed JSON, wrong Content-Type | Fix each item in `details[]`, then resend  |
-| 401  | `AUTH_MISSING_API_KEY` | No `X-API-Key` header                                 | Add the header; check proxies aren't stripping it  |
-| 401  | `AUTH_INVALID_API_KEY` | Wrong, expired or whitespace-padded key               | Re-copy the key from the credentials vault          |
-| 404  | `NOT_FOUND`            | Wrong path (e.g. `/webhooks`, `/api/v2/...`)          | Use `/api/v1/webhook`                               |
-| 405  | `METHOD_NOT_ALLOWED`   | `GET` sent to `/webhook`                              | Send `POST`                                         |
-| 429  | `RATE_LIMITED`         | `X-Simulate-Rate-Limit: true` was sent                | Back off for `Retry-After` seconds, then retry      |
-| 500  | `INTERNAL_ERROR`       | Unhandled server bug                                  | Escalate with the `request_id`                      |
-| 503  | `DATABASE_UNAVAILABLE` | Health check could not reach SQLite                   | Infrastructure issue; check disk and file locks     |
+It lists every problem at once, not just the first one. Nobody wants to fix one thing, resend, and then get told about the next thing.
 
-## Try it
+| Code | error_code | What happened | What you'd tell the customer |
+|---|---|---|---|
+| 400 | `VALIDATION_FAILED` | Broken JSON, missing or wrong field, bad email, or Content-Type isn't `application/json` | Fix what's listed in `details`, then resend |
+| 401 | `AUTH_MISSING_API_KEY` | No `X-API-Key` header | Add the header. If they swear they did, something in between (like a proxy) might be stripping it |
+| 401 | `AUTH_INVALID_API_KEY` | Key is wrong | Re-copy the key, and check it's not the key from a different environment (test vs live) |
+| 404 | `NOT_FOUND` | Wrong URL, like `/webhooks` instead of `/webhook` | Use `/api/v1/webhook` |
+| 405 | `METHOD_NOT_ALLOWED` | Sent GET to the webhook instead of POST | Use POST |
+| 429 | `RATE_LIMITED` | Too many requests (faked here with a header) | Wait the number of seconds in the `Retry-After` header, then retry |
+| 500 | `INTERNAL_ERROR` | Our bug | Escalate to engineering with the `request_id` |
+| 503 | `DATABASE_UNAVAILABLE` | Database is down (health check only) | Infra problem, not theirs |
 
-### Option A: Postman
+> Note: rough rule of thumb. **4xx = the caller did something wrong. 5xx = we did.** That one rule answers "whose fault is it" most of the time.
 
-**Import → File →** `postman/mock-api-triage.postman_collection.json`. It contains 9 requests (200, two kinds of
-400, two kinds of 401, 429 and two log queries), each with test assertions. Use **Run collection** to run them all and
-see every check pass. `baseUrl` and `apiKey` are collection variables.
+## Finding a request in the logs (the actual support part)
 
-You can also paste any curl command below into **Import → Raw text**.
+Every response has an `X-Request-ID` header, a unique ID for that one request. The customer can also send their own (letters, numbers, `-`, `_`, `.`) and it gets used instead. That's how you find "that one request from 3pm" without guessing.
 
-### Option B: curl
+Example: a customer says "your webhook keeps rejecting us, our request ID was case-4711."
 
-**1. Success → `200 OK`**
-
-```bash
-curl -i -X POST http://localhost:8000/api/v1/webhook \
-  -H 'Content-Type: application/json' \
-  -H 'X-API-Key: test_secret_123' \
-  -d '{"ticket_id": "TCK-1001", "customer_email": "jane.doe@acmecorp.com", "payload_type": "ticket.created", "data": {"priority": "high", "subject": "SSO login failing for EU tenant"}}'
-```
-
-```json
-{"status": "success", "tracking_id": "7b410280-751a-402e-8b28-7e0bf6fa014d"}
-```
-
-**2. Bad email and missing `payload_type` → `400 Bad Request`**
-
-```bash
-curl -i -X POST http://localhost:8000/api/v1/webhook \
-  -H 'Content-Type: application/json' \
-  -H 'X-API-Key: test_secret_123' \
-  -d '{"ticket_id": "TCK-1002", "customer_email": "jane.doe-at-acmecorp.com", "data": {"priority": "low"}}'
-```
-
-The response lists both problems; see the error envelope above.
-
-**3. Missing API key → `401 Unauthorized`**
-
-```bash
-curl -i -X POST http://localhost:8000/api/v1/webhook \
-  -H 'Content-Type: application/json' \
-  -d '{"ticket_id": "TCK-1001", "customer_email": "jane.doe@acmecorp.com", "payload_type": "ticket.created", "data": {}}'
-```
-
-```json
-{"status": "error", "error_code": "AUTH_MISSING_API_KEY", "message": "Missing X-API-Key header.", "request_id": "..."}
-```
-
-**Bonus: simulated rate limit → `429` with `Retry-After: 60`**
-
-```bash
-curl -i -X POST http://localhost:8000/api/v1/webhook \
-  -H 'Content-Type: application/json' \
-  -H 'X-API-Key: test_secret_123' \
-  -H 'X-Simulate-Rate-Limit: true' \
-  -d '{"ticket_id": "TCK-1001", "customer_email": "jane.doe@acmecorp.com", "payload_type": "ticket.created", "data": {}}'
-```
-
-### Windows PowerShell note
-
-In Windows PowerShell 5.1, `curl` is an alias for `Invoke-WebRequest`, and inline JSON quoting breaks when passed
-to native programs. Call `curl.exe` explicitly and send the body from a file:
+Send it as the customer:
 
 ```powershell
-curl.exe -i -X POST http://localhost:8000/api/v1/webhook -H "Content-Type: application/json" -H "X-API-Key: test_secret_123" --data "@examples/200_success.json"
-curl.exe -i -X POST http://localhost:8000/api/v1/webhook -H "Content-Type: application/json" -H "X-API-Key: test_secret_123" --data "@examples/400_invalid_payload.json"
-curl.exe -i -X POST http://localhost:8000/api/v1/webhook -H "Content-Type: application/json" --data "@examples/200_success.json"
+curl.exe -X POST http://localhost:8000/api/v1/webhook -H "Content-Type: application/json" -H "X-API-Key: test_secret_123" -H "X-Request-ID: case-4711" --data "@examples/400_invalid_payload.json"
 ```
 
-## Triage walkthrough
+Now be support. See what's been going on:
 
-A customer reports *"your webhook keeps rejecting us"* and quotes request ID `case-4711`
-(clients can set their own `X-Request-ID`; otherwise the server generates one).
-
-```bash
-# 1. What failed recently?
-curl -s "http://localhost:8000/api/v1/logs?status_code=400&limit=10" -H 'X-API-Key: test_secret_123'
-
-# 2. Find the entry with "request_id": "case-4711" and read error_detail:
-#    field=customer_email, error_type=value_error -> their system is sending a malformed email.
-
-# 3. Confirm a fix: a successful retry shows status_code 200 with tracking_id and ticket_id filled in.
+```powershell
+$h = @{ "X-API-Key" = "test_secret_123" }
+(Invoke-RestMethod "http://localhost:8000/api/v1/logs?limit=10" -Headers $h).logs | Format-Table request_id, status_code, error_code, ticket_id -AutoSize
 ```
 
-To inspect the raw tables: `sqlite3 tickets.db "SELECT * FROM request_logs ORDER BY id DESC LIMIT 5;"`
-(or open `tickets.db` in DB Browser for SQLite).
+Then pull up their request and see why it failed:
+
+```powershell
+$entry = (Invoke-RestMethod "http://localhost:8000/api/v1/logs?status_code=400" -Headers $h).logs | Where-Object request_id -eq "case-4711"
+$entry.error_detail | Format-List field, error_type, issue
+```
+
+Their email is missing the @ and `payload_type` isn't there at all. So it's on their side, and you can tell them exactly which two things to fix.
+
+`/logs` also takes `?status_code=401` (or any code) to only show that kind of error, and `?limit=` up to 500. On Mac/Linux just run `curl "http://localhost:8000/api/v1/logs?status_code=400" -H "X-API-Key: test_secret_123"` and read the JSON.
 
 ## Tests
 
-```bash
-python -m pytest -v
+```powershell
+.\.venv\Scripts\python.exe -m pytest -v
 ```
 
-The suite covers every status code, the order of checks (auth, then rate limit, then validation), line/column
-reporting for malformed JSON, request-ID correlation, log filtering and PII redaction, the 500 envelope, and that
-the OpenAPI docs match the actual 400 behavior.
+17 tests, should all pass. The server doesn't need to be running, and they use their own throwaway database so your real data doesn't get touched.
 
-## Configuration
+They cover every status code, that the key gets checked before anything else, that request IDs end up in the logs, and that customer emails don't leak into the logs.
 
-| Env var          | Default            | Purpose               |
-|------------------|--------------------|-----------------------|
-| `TRIAGE_API_KEY` | `test_secret_123`  | Accepted `X-API-Key`  |
-| `TRIAGE_DB_PATH` | `./tickets.db`     | SQLite file location  |
+## Notes
 
-## Design notes
+Stuff that isn't obvious just from using it:
 
-- **400, not 422.** FastAPI returns `422 Unprocessable Entity` for validation errors by default. This contract
-  specifies `400`, so `errors.py` replaces the handler and `main.py` removes the stale 422 entries from the OpenAPI spec.
-- **Check order.** Dependencies run auth, then rate limiting, then body validation, so unauthenticated callers learn
-  nothing about the schema. One framework caveat: FastAPI parses JSON *before* running dependencies, so a body that
-  isn't valid JSON gets `400` even without an API key. In production, auth usually happens at the API gateway before
-  the app sees the request.
-- **Privacy in logs.** `/logs` never returns `customer_email`, and stored validation errors keep the field and reason
-  but not the rejected value. The caller still sees their own value in the live response.
-- **SQLite access.** Parameterized queries only, one short-lived connection per operation (sqlite3 connections can't
-  be shared across threads), WAL mode so log reads don't block webhook writes, and blocking DB calls kept off the
-  async event loop.
+1. **Why 400 and not 422.** FastAPI (the framework) normally answers bad data with a 422. I switched it to 400 since that's the more common answer for a bad request and what I wanted this API to return. The /docs page says 400 too, so the docs match what actually happens.
+
+2. **The key gets checked first.** No valid key means a 401 before the API even looks at your JSON, so a stranger can't poke at it to learn what fields it wants. One exception: if the body isn't valid JSON at all (like a missing comma), FastAPI catches that first and you get a 400. That's just how FastAPI works. At a real company the key usually gets checked even earlier, by a gateway sitting in front of the app.
+
+3. **Customer emails stay out of the logs.** `/logs` never shows `customer_email`. When a request gets rejected, the log saves which field failed and why, but not the bad value itself. The customer still sees their own value in the error they get back. Lots of people read logs, so personal info shouldn't be sitting in them.
+
+4. **Broken JSON tells you where.** The error says something like `Expecting ',' delimiter (line 3, column 3)` so you can jump straight to it in Postman instead of staring at the whole body.
+
+5. **The rate limit is fake.** Nothing is actually counted. Send `X-Simulate-Rate-Limit: true` and you get the 429. It's there so you can see what a 429 looks like and how `Retry-After` works.
+
+6. **Where the data lives.** `tickets.db` in the project folder, a SQLite file. Two tables: `tickets` (accepted webhooks) and `request_logs` (every request, good or bad). DB Browser for SQLite can open it if you want to look inside.
+
+7. **Starting fresh.** Stop the server, delete `tickets.db`, start it again. It makes a new one.
+
+8. **Changing settings.** Set `TRIAGE_API_KEY` to use a different key, or `TRIAGE_DB_PATH` to put the database somewhere else.
+
+## How the code is split up
+
+| File | What's in it |
+|---|---|
+| `app/main.py` | Starts the app, gives every request its ID, writes the logs |
+| `app/routes.py` | The three endpoints |
+| `app/schemas.py` | What a valid webhook looks like |
+| `app/security.py` | The API key check and the fake rate limit |
+| `app/errors.py` | Turns every error into the same JSON shape |
+| `app/database.py` | Everything that touches SQLite |
+| `app/config.py` | Settings |
+| `examples/` | JSON files for the curl commands |
+| `postman/` | The Postman collection |
+| `tests/` | The tests |
+
+> Note: **Pydantic** is what checks the JSON. You describe what valid data looks like once (that's `schemas.py`), and it rejects anything that doesn't match, with a reason. FastAPI runs it automatically on every request.
