@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tickets.db
+tickets.db-wal
+tickets.db-shm

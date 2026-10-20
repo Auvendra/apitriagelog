@@ -1,0 +1,7 @@
+{
+  "ticket_id": "TCK-1002",
+  "customer_email": "jane.doe-at-acmecorp.com",
+  "data": {
+    "priority": "low"
+  }
+}

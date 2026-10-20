@@ -1,0 +1,324 @@
+{
+  "info": {
+    "name": "Mock API Triage Workspace",
+    "description": "Requests for the local FastAPI webhook listener. Start the server first: python -m uvicorn app.main:app --reload",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "apiKey",
+      "value": "test_secret_123"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health check (200)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/v1/health",
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook - success (200)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ticket_id\": \"TCK-1001\",\n  \"customer_email\": \"jane.doe@acmecorp.com\",\n  \"payload_type\": \"ticket.created\",\n  \"data\": {\n    \"priority\": \"high\",\n    \"subject\": \"SSO login failing for EU tenant\",\n    \"account_id\": \"ACME-EU-042\"\n  }\n}\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/v1/webhook",
+        "description": "Valid payload. Returns status=success and a UUID tracking_id."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Returns a tracking_id\", () => pm.expect(pm.response.json().tracking_id).to.be.a(\"string\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook - invalid email + missing field (400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ticket_id\": \"TCK-1002\",\n  \"customer_email\": \"jane.doe-at-acmecorp.com\",\n  \"data\": {\n    \"priority\": \"low\"\n  }\n}\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/v1/webhook",
+        "description": "Bad email format and no payload_type. Both problems are listed in details[]."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+              "pm.test(\"error_code is VALIDATION_FAILED\", () => pm.expect(pm.response.json().error_code).to.eql(\"VALIDATION_FAILED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook - malformed JSON (400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ticket_id\": \"TCK-1003\"\n  \"customer_email\": \"jane.doe@acmecorp.com\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/v1/webhook",
+        "description": "Missing comma between fields. details[] reports the line and column."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+              "pm.test(\"error_code is VALIDATION_FAILED\", () => pm.expect(pm.response.json().error_code).to.eql(\"VALIDATION_FAILED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook - missing API key (401)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ticket_id\": \"TCK-1001\",\n  \"customer_email\": \"jane.doe@acmecorp.com\",\n  \"payload_type\": \"ticket.created\",\n  \"data\": {\n    \"priority\": \"high\",\n    \"subject\": \"SSO login failing for EU tenant\",\n    \"account_id\": \"ACME-EU-042\"\n  }\n}\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/v1/webhook",
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+              "pm.test(\"error_code is AUTH_MISSING_API_KEY\", () => pm.expect(pm.response.json().error_code).to.eql(\"AUTH_MISSING_API_KEY\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook - wrong API key (401)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "wrong_key"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ticket_id\": \"TCK-1001\",\n  \"customer_email\": \"jane.doe@acmecorp.com\",\n  \"payload_type\": \"ticket.created\",\n  \"data\": {\n    \"priority\": \"high\",\n    \"subject\": \"SSO login failing for EU tenant\",\n    \"account_id\": \"ACME-EU-042\"\n  }\n}\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/v1/webhook",
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+              "pm.test(\"error_code is AUTH_INVALID_API_KEY\", () => pm.expect(pm.response.json().error_code).to.eql(\"AUTH_INVALID_API_KEY\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook - simulated rate limit (429)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-Simulate-Rate-Limit",
+            "value": "true"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ticket_id\": \"TCK-1001\",\n  \"customer_email\": \"jane.doe@acmecorp.com\",\n  \"payload_type\": \"ticket.created\",\n  \"data\": {\n    \"priority\": \"high\",\n    \"subject\": \"SSO login failing for EU tenant\",\n    \"account_id\": \"ACME-EU-042\"\n  }\n}\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/v1/webhook",
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 429\", () => pm.response.to.have.status(429));",
+              "pm.test(\"Retry-After is 60\", () => pm.expect(pm.response.headers.get(\"Retry-After\")).to.eql(\"60\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Logs - recent",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/v1/logs?limit=20",
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Logs - only 400s",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/v1/logs?status_code=400",
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Every entry is a 400\", () => pm.response.json().logs.forEach(l => pm.expect(l.status_code).to.eql(400)));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
